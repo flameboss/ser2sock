@@ -183,6 +183,7 @@ void add_to_all_socket_fds(char  *message, unsigned int len);
 void add_to_serial_fd(char * message, unsigned int len);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
+void set_modem_outputs(int fd);
 void print_serial_fd_status(int fd);
 int get_baud(char *szbaud);
 void listen_loop();
@@ -245,6 +246,8 @@ BOOL option_daemonize = FALSE;
 BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
+int option_set_rts; /* 0 not set, 1 low, 2 high */
+int option_set_dtr; /* 0 not set, 1 low, 2 high */
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
 char * option_pid_file = NULL;
@@ -426,6 +429,7 @@ void show_help(const char *appName)
 #ifdef HAVE_LIBSSL
 				"  -e                        use SSL to encrypt the connection\n"
 #endif
+				"  -m(-|+)(rts|dtr)          set on or off RTS or DTR\n"
 				"\n", appName);
 }
 
@@ -676,6 +680,9 @@ int init_serial_fd(char * szPortPath)
 
 	tcflush(fd, TCIFLUSH);
 	tcsetattr(fd, TCSANOW, &newtio);
+
+	set_modem_outputs(fd);
+
 	if (option_debug_level > 2)
 		print_serial_fd_status(fd);
 
@@ -706,6 +713,44 @@ void print_serial_fd_status(int fd)
 	if (arg & TIOCM_RNG)
 		log_message(STREAM_MAIN, MSG_GOOD, "RI ");
 	log_message(STREAM_MAIN, MSG_GOOD, "\n");
+}
+
+void set_modem_outputs(int fd)
+{
+	int rv;
+	unsigned int arg;
+
+	if (option_set_dtr == 0 && option_set_rts == 0)
+		return;
+
+	rv = ioctl(fd, TIOCMGET, &arg);
+	if (rv != 0)
+	{
+		log_message(STREAM_MAIN, MSG_WARN, "failed getting modem status: %s\n",
+				strerror(errno));
+		return;
+	}
+
+	if (option_set_dtr == 2)
+		arg |= TIOCM_DTR;
+	else if (option_set_dtr == 1)
+		arg &= ~TIOCM_DTR;
+
+	if (option_set_rts == 2)
+		arg |= TIOCM_RTS;
+	else if (option_set_rts == 1)
+		arg &= ~TIOCM_RTS;
+
+	rv = ioctl(fd, TIOCMSET, &arg);
+	if (rv == 0)
+	{
+		log_message(STREAM_MAIN, MSG_GOOD, "set dtr or rts\n");
+	}
+	else
+	{
+		log_message(STREAM_MAIN, MSG_WARN, "failed setting dtr or rts: %s\n",
+				strerror(errno));
+	}
 }
 
 /*
@@ -1556,6 +1601,19 @@ int parse_args(int argc, char * argv[])
 					skip = skip_param(&loc_argv[1][0]);
 					option_config_path = &loc_argv[1][skip];
 					break;
+                case 'm':
+                    {
+                        int val;
+                        skip = skip_param(&loc_argv[1][0]);
+                        val = loc_argv[1][skip] == '+' ? 1 : 0;
+                        if (strcmp(&loc_argv[1][skip + 1], "rts") == 0) {
+                            option_set_rts = val + 1;
+                        }
+                        else if (strcmp(&loc_argv[1][skip + 1], "dtr") == 0) {
+                            option_set_dtr = val + 1;
+                        }
+                    }
+                    break;
 #ifdef HAVE_LIBSSL
 				case 'e':
 					option_ssl = TRUE;
