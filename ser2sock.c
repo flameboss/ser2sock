@@ -180,6 +180,7 @@ int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
 void add_to_all_socket_fds(char  *message, unsigned int len);
+void add_to_all_socket_fds_except(char  *message, unsigned int len, int except_i);
 void add_to_serial_fd(char * message, unsigned int len);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
@@ -245,6 +246,8 @@ char * option_baud_rate = NULL;
 BOOL option_daemonize = FALSE;
 BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
+/** echo all input on sockets to all other sockets as well as to serial */
+BOOL option_echo = FALSE;
 int option_debug_level = 0;
 int option_set_rts; /* 0 not set, 1 low, 2 high */
 int option_set_dtr; /* 0 not set, 1 low, 2 high */
@@ -1244,6 +1247,9 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							{
 								did_work = TRUE;
 								add_to_serial_fd(buffer, received);
+								if (option_echo) {
+								    add_to_all_socket_fds_except(buffer, received, n);
+								}
 								if (option_debug_level > 2)
 								{
 									log_message(STREAM_MAIN, MSG_WARN, "SOCKET[%i]>", n);
@@ -1473,6 +1479,36 @@ void listen_loop()
  add_to_all_socket_fds
  adds a buffer to every connected socket fd ie multiplexes
  */
+void add_to_all_socket_fds_except(char * message, unsigned int len, int except_i)
+{
+    void * tempbuffer;
+    int n;
+
+    /*
+     Adding anything to the fifo must be allocated so it can be free'd later
+     Not very efficient but we have plenty of mem with as few connections as we
+     will use. If we needed many more I would need to re-factor this code
+     */
+    for (n = 0; n < MAXCONNECTIONS; n++)
+    {
+        if (n == except_i)
+            continue;
+        if (my_fds[n].inuse == TRUE)
+        {
+            if (my_fds[n].fd_type == CLIENT_SOCKET)
+            {
+                /* caller of fifo_get must free this */
+                tempbuffer = fifo_make_buffer(message,len);
+                fifo_add(&my_fds[n].send_buffer, tempbuffer);
+            }
+        }
+    }
+}
+
+/*
+ add_to_all_socket_fds
+ adds a buffer to every connected socket fd ie multiplexes
+ */
 void add_to_all_socket_fds(char * message, unsigned int len)
 {
 	void * tempbuffer;
@@ -1619,6 +1655,9 @@ int parse_args(int argc, char * argv[])
 					option_ssl = TRUE;
 					break;
 #endif
+				case 'o':
+				    option_echo = TRUE;
+				    break;
 
 				default:
 					show_help(argv[0]);
